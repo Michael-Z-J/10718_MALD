@@ -1,0 +1,15 @@
+Oct5 notes:
+Each baseline file produces a jsonl
+python baseline/nonMLBaseline.py
+python baseline/qwen_baseline.py
+
+outputs of baseline jsonl follows this structure for each example:
+{"id": "718", "review": "<free-text review>"}                       # baseline LLM output
+{"id": "718", "rating": 9.9, "changes": [{"category": "clarity"}]}  # nonMLBaseline.py
+
+Baseline on 2017 iclr2017
+349 train
+38 test
+
+Format eval as:
+python evaluation/eval.py baseline/nonml_iclr2017_test.jsonl
