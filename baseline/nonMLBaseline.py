@@ -14,15 +14,18 @@ For each test paper:
 Nothing is trained on PeerRead. Data is the raw allenai/PeerRead JSON (the same files the
 HF `allenai/peer_read` loader downloads); it is fetched from GitHub on first run.
 
+Writes one JSON line per paper ({"id", "title", "rating", "decision", "changes", "neighbors"});
+scoring against the real reviews is done by evaluation/eval.py.
+
 Usage:
     pip install gensim numpy
-    python nonMLBaseline.py                      # evaluate on the ICLR 2017 test split
+    python nonMLBaseline.py                      # review the ICLR 2017 test split
     python nonMLBaseline.py --split dev --k 5 --show 3
+    python evaluation/eval.py baseline/nonml_iclr2017_test.jsonl
 """
 
 import argparse
 import json
-import math
 import os
 import re
 import urllib.request
@@ -234,6 +237,13 @@ def review_weaknesses(review):
     return by_cat
 
 
+def category_prior(weaknesses):
+    """Categories ordered by how many reviews raise them (ties keep the CATEGORIES order),
+    given an iterable of review_weaknesses() dicts."""
+    counts = Counter(c for w in weaknesses for c in w)
+    return sorted(ACTIONS, key=lambda c: -counts[c])
+
+
 # ---------------------------------------------------------------- the baseline
 
 def rating_to_decision(score):
@@ -260,9 +270,7 @@ class NonMLReviewer:
             p["weaknesses"] = [review_weaknesses(r) for r in p["reviews"]]
         # Global category frequency over training reviews: only used to fill when
         # the neighbors raise fewer than 5 distinct categories.
-        counts = Counter(c for p in self.train for w in p["weaknesses"] for c in w)
-        self.category_prior = [key for key, _, _ in CATEGORIES]
-        self.category_prior.sort(key=lambda c: -counts[c])
+        self.category_prior = category_prior(w for p in self.train for w in p["weaknesses"])
 
     def neighbors(self, text):
         q = embed(text, self.kv)
@@ -307,83 +315,12 @@ class NonMLReviewer:
         }
 
 
-# ---------------------------------------------------------------- evaluation
-
-def _ranks(x):
-    x = np.asarray(x, dtype=float)
-    order = np.argsort(x)
-    ranks = np.empty(len(x))
-    ranks[order] = np.arange(len(x))
-    for v in np.unique(x):  # average ranks for ties
-        mask = x == v
-        ranks[mask] = ranks[mask].mean()
-    return ranks
-
-
-def _pearson(a, b):
-    a, b = np.asarray(a, float), np.asarray(b, float)
-    if a.std() == 0 or b.std() == 0:
-        return float("nan")
-    return float(np.corrcoef(a, b)[0, 1])
-
-
-def _auc(scores, labels):
-    pos = [s for s, l in zip(scores, labels) if l]
-    neg = [s for s, l in zip(scores, labels) if not l]
-    if not pos or not neg:
-        return float("nan")
-    wins = sum((p > n) + 0.5 * (p == n) for p in pos for n in neg)
-    return wins / (len(pos) * len(neg))
-
-
-def evaluate(reviewer, test_papers, accept_threshold=6.0):
-    papers = [p for p in test_papers if p["reviews"]]
-    results, gold, pred = [], [], []
-    p_at_5, r_at_5, prior_p, prior_r = [], [], [], []
-    prior_top5 = set(reviewer.category_prior[:5])
-
-    for p in papers:
-        out = reviewer.review(p["title"], p["abstract"])
-        gold_cats = set(c for r in p["reviews"] for c in review_weaknesses(r))
-        pred_cats = set(c["category"] for c in out["changes"])
-        if gold_cats:
-            p_at_5.append(len(pred_cats & gold_cats) / 5)
-            r_at_5.append(len(pred_cats & gold_cats) / len(gold_cats))
-            prior_p.append(len(prior_top5 & gold_cats) / 5)
-            prior_r.append(len(prior_top5 & gold_cats) / len(gold_cats))
-        gold.append(p["rating"])
-        pred.append(out["rating"])
-        results.append({"id": p["id"], "title": p["title"], "gold_rating": round(p["rating"], 2),
-                        "accepted": p["accepted"], "gold_weakness_categories": sorted(gold_cats), **out})
-
-    gold, pred = np.array(gold), np.array(pred)
-    train_mean = float(np.mean([p["rating"] for p in reviewer.train]))
-    accepted = [bool(p["accepted"]) for p in papers]
-    majority = max(np.mean(accepted), 1 - np.mean(accepted))
-    metrics = {
-        "n_test_papers": len(papers),
-        "k": reviewer.k,
-        "rating_MAE": float(np.abs(pred - gold).mean()),
-        "rating_RMSE": float(np.sqrt(((pred - gold) ** 2).mean())),
-        "rating_pearson": _pearson(pred, gold),
-        "rating_spearman": _pearson(_ranks(pred), _ranks(gold)),
-        "const_train_mean_MAE": float(np.abs(train_mean - gold).mean()),
-        "accept_AUC": _auc(pred, accepted),
-        f"accept_acc@{accept_threshold}": float(np.mean([(s >= accept_threshold) == a for s, a in zip(pred, accepted)])),
-        "accept_majority_acc": float(majority),
-        "weakness_precision@5": float(np.mean(p_at_5)) if p_at_5 else float("nan"),
-        "weakness_recall@5": float(np.mean(r_at_5)) if r_at_5 else float("nan"),
-        "prior_top5_precision@5": float(np.mean(prior_p)) if prior_p else float("nan"),
-        "prior_top5_recall@5": float(np.mean(prior_r)) if prior_r else float("nan"),
-    }
-    return metrics, results
-
+# ---------------------------------------------------------------- output
 
 def print_review(r):
     print("=" * 100)
     print(f"[{r['id']}] {r['title']}")
-    print(f"  predicted rating: {r['rating']:.2f} ({r['decision']})   gold mean rating: {r['gold_rating']:.2f}"
-          f"   accepted: {r['accepted']}")
+    print(f"  predicted rating: {r['rating']:.2f} ({r['decision']})")
     print("  nearest training papers:")
     for n in r["neighbors"]:
         print(f"    sim={n['similarity']:.3f}  rating={n['mean_rating']:.2f}  {n['title'][:80]}")
@@ -403,29 +340,27 @@ def main():
     ap.add_argument("--data_dir", default=DEFAULT_DATA_DIR,
                     help="dir with {train,dev,test}/reviews/*.json (e.g. PeerRead/data/iclr_2017)")
     ap.add_argument("--show", type=int, default=3, help="number of example reviews to print")
-    ap.add_argument("--out", default=None, help="output JSON path (default: baseline/nonml_iclr2017_<split>.json)")
+    ap.add_argument("--out", default=None, help="output JSONL path (default: baseline/nonml_iclr2017_<split>.jsonl)")
     args = ap.parse_args()
 
     train = load_split(args.data_dir, "train")
     test = load_split(args.data_dir, args.split)
     print(f"Loaded {len(train)} train / {len(test)} {args.split} papers "
-          f"({sum(bool(p['reviews']) for p in train)} / {sum(bool(p['reviews']) for p in test)} with rated reviews)")
+          f"({sum(bool(p['reviews']) for p in train)} train papers with rated reviews)")
 
     kv = load_word2vec(args.w2v)
     reviewer = NonMLReviewer(train, kv, k=args.k)
-    metrics, results = evaluate(reviewer, test)
 
-    for r in results[: args.show]:
-        print_review(r)
-    print("=" * 100)
-    print("Metrics:")
-    for name, val in metrics.items():
-        print(f"  {name:28s} {val:.4f}" if isinstance(val, float) and not math.isnan(val) else f"  {name:28s} {val}")
-
-    out_path = args.out or os.path.join(HERE, f"nonml_iclr2017_{args.split}.json")
+    out_path = args.out or os.path.join(HERE, f"nonml_iclr2017_{args.split}.jsonl")
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"metrics": metrics, "results": results}, f, indent=2, ensure_ascii=False)
-    print(f"Wrote {out_path}")
+        for i, p in enumerate(test):
+            r = {"id": p["id"], "title": p["title"], **reviewer.review(p["title"], p["abstract"])}
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            if i < args.show:
+                print_review(r)
+    print("=" * 100)
+    print(f"Wrote {len(test)} reviews to {out_path}")
+    print(f"Evaluate with: python evaluation/eval.py {out_path}")
 
 
 if __name__ == "__main__":
