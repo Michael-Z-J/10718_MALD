@@ -2,7 +2,7 @@
 deduplicate across the reviewers of each paper.
 
 Writes data/weaknesses.jsonl, one row per deduplicated weakness:
-  {paper_id, weakness_id, weakness, type, n_reviewers, variants}
+  {paper_id, weakness_id, weakness, type, n_reviewers, reviewers, variants}
 
 Usage:
   python extract_weaknesses.py                  # LLM split (needs call_llm)
@@ -13,6 +13,8 @@ import argparse
 import os
 import re
 from collections import defaultdict
+
+import numpy as np
 
 from common import DATA_DIR, call_llm, embed, parse_json, read_jsonl, write_jsonl
 
@@ -41,12 +43,13 @@ def split_llm(text):
     return parse_json(call_llm(EXTRACT_PROMPT.format(review_text=text)))
 
 
-def dedup(items, threshold):
+def dedup(items, threshold, vecs=None):
     """Greedy clustering: an item joins the most similar existing cluster if cosine >= threshold
     and that cluster doesn't already contain this reviewer. Returns lists of items."""
     if not items:
         return []
-    vecs = embed([it["weakness"] for it in items])
+    if vecs is None:
+        vecs = embed([it["weakness"] for it in items])
     clusters = []  # (centroid_index, [item indices], reviewer set)
     for i, it in enumerate(items):
         best, best_sim = None, threshold
@@ -75,9 +78,14 @@ def main():
             for it in split(r["weaknesses"]):
                 by_paper[r["paper_id"]].append({**it, "reviewer": r["reviewer"]})
 
+    # Embed everything in one batched pass; per-paper calls are dominated by overhead.
+    texts = sorted({it["weakness"] for items in by_paper.values() for it in items})
+    vectors = dict(zip(texts, embed(texts, batch_size=512, show_progress_bar=True)))
+
     rows = []
     for pid, items in by_paper.items():
-        for k, cluster in enumerate(dedup(items, args.dedup_threshold)):
+        vecs = np.stack([vectors[it["weakness"]] for it in items])
+        for k, cluster in enumerate(dedup(items, args.dedup_threshold, vecs)):
             types = {it["type"] for it in cluster}
             rows.append({
                 "paper_id": pid,
@@ -85,6 +93,7 @@ def main():
                 "weakness": cluster[0]["weakness"],
                 "type": "substantive" if "substantive" in types else cluster[0]["type"],
                 "n_reviewers": len({it["reviewer"] for it in cluster}),
+                "reviewers": sorted({it["reviewer"] for it in cluster}),
                 "variants": [it["weakness"] for it in cluster[1:]],
             })
     write_jsonl(os.path.join(DATA_DIR, "weaknesses.jsonl"), rows)

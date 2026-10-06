@@ -30,13 +30,13 @@ def parse_json(text: str):
 _embedder = None
 
 
-def embed(texts):
+def embed(texts, **encode_kwargs):
     """L2-normalised sentence embeddings, so a dot product is cosine similarity."""
     global _embedder
     if _embedder is None:
         from sentence_transformers import SentenceTransformer
         _embedder = SentenceTransformer("all-MiniLM-L6-v2")
-    return np.asarray(_embedder.encode(list(texts), normalize_embeddings=True))
+    return np.asarray(_embedder.encode(list(texts), normalize_embeddings=True, **encode_kwargs))
 
 
 def read_jsonl(path):

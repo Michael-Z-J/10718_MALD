@@ -1,15 +1,20 @@
 Oct5 notes:
-Each baseline file produces a jsonl
-python baseline/nonMLBaseline.py
-python baseline/qwen_baseline.py
+Each baseline writes a jsonl to evaluation/outputs/ in the shared format match.py reads:
+{"paper_id": "<OpenReview id>", "issues": ["...", ...5], "severities": [1-5, ...]}
 
-outputs of baseline jsonl follows this structure for each example:
-{"id": "718", "review": "<free-text review>"}                       # baseline LLM output
-{"id": "718", "rating": 9.9, "changes": [{"category": "clarity"}]}  # nonMLBaseline.py
+Data: ICLR 2024 (neighbor pool) + ICLR 2026 (test set) in evaluation/data/:
+cd evaluation && python fetch_reviews.py --years 2024 2026
 
-Baseline on 2017 iclr2017
-349 train
-38 test
+Non-ML baseline (neighbors retrieved from ICLR 2024: 5,690 papers; ranked by severity; runs on all 13,702 2026 papers):
+python baseline/nonMLBaseline.py --test_papers evaluation/data/papers.jsonl --test_year 2026 --train_years 2024
 
-Format eval as:
-python evaluation/eval.py baseline/nonml_iclr2017_test.jsonl
+LLM baseline (needs full text, so a random sample of 50 papers):
+export OPENREVIEW_USERNAME=... OPENREVIEW_PASSWORD=...
+cd evaluation && python fetch_pdfs.py --year 2026 --n 50    # -> data/sample_2026_50.json, data/fulltext/
+python baseline/llm_baseline.py --model Qwen/Qwen3-8B --load_in_4bit --max_input_tokens 16000
+
+Evaluate (sentence-similarity matching; precision@5 is the headline metric; ties at the
+non-ML top-5 cutoff are scored as the expected value over all tie-breaks):
+cd evaluation && python match.py outputs/nonml_iclr2026_severity_train2024.jsonl --matcher embedding --sim-threshold 0.5
+cd evaluation && python match.py outputs/llm_Qwen3-8B.jsonl --matcher embedding --sim-threshold 0.5 \
+    --paper-ids data/sample_2026_50.json
