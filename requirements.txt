@@ -2,5 +2,6 @@ httpx
 numpy
 polars
 scikit-learn
+scipy
 sentence-transformers
 torch
