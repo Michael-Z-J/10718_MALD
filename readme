@@ -18,3 +18,38 @@ non-ML top-5 cutoff are scored as the expected value over all tie-breaks):
 cd evaluation && python match.py outputs/nonml_iclr2026_severity_train2024.jsonl --matcher embedding --sim-threshold 0.5
 cd evaluation && python match.py outputs/llm_Qwen3-8B.jsonl --matcher embedding --sim-threshold 0.5 \
     --paper-ids data/sample_2026_50.json
+
+Oct29 notes (initial ML solution, package mald/):
+Data: CASIMIR (official release, huggingface taln-ls2n/CASIMIR). Test = 40 ICLR 2023 papers, val = 12
+ICLR 2022 papers (seeded order); pool = ICLR 2020-2022 + NeurIPS 2022; concurrent ICLR 2023 forums unused.
+
+Setup:
+pip install -r requirements.txt
+export MALD_ROOT=/fast/local/disk/mald      # work root; default ./work (casimir/, build/, out/, cache/, judge/)
+Other overrides: MALD_CASIMIR MALD_BUILD MALD_OUT MALD_CACHE MALD_JUDGE MALD_REPORT (default ./report).
+
+LLM servers (llama.cpp, openai-compatible; url per model from MALD_<MODEL>_URL, default local port):
+  gemma    8091  google/gemma-4-12B-it-qat-q4_0-gguf         generator (all systems)
+  glimmer  8092  meta-models/Muse-Glimmer-30B-GGUF           review parsing for gt, llm matcher; add --reasoning-budget 0
+  nemotron 8093  unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF   second generator
+  qwen     8094  unsloth/Qwen3.8-27B-GGUF                    optional (QWEN=1)
+e.g. llama-server -m <gguf> --host 127.0.0.1 --port 8091 -ngl 999 -c 131072 -np 4 --kv-unified -fa on --jinja --alias gemma
+Every reply and token count is cached in MALD_CACHE. With a full cache no server is needed.
+MALD_CACHE_ONLY=1 makes a cache miss an error. The agentic configs cluster bge vectors, and tied issues
+can come out in another order on another GPU type; configs whose llm meta-review reads that table then
+need the gemma server for those papers.
+
+Run everything (resumable; a rerun skips finished papers):
+scripts/pipeline.sh            # corpus -> gt -> val sweep -> selection -> test runs -> evaluation -> tables
+scripts/report.sh              # tables and figures only -> report/
+Single steps:
+python -m mald.build                                     # corpus from casimir (downloads it if missing)
+python -m mald.gt test 40                                # gt from the real reviews
+python -m mald.run test 40 m m '{"theta":0.3,"w":0,"llm_meta":false}'
+python -m mald.evaluate test judge m b1 b0 b1old         # judge: also score with the llm matcher
+Systems: b0 = non-ML baseline, b1old = ML baseline, b1 = ours (one prompt), m = ours (agentic).
+
+LLM judge (secondary check, 12 test papers):
+MALD_JUDGE=$MALD_ROOT/judge python -m mald.judge_prep 12 m b1 b0     # bundles + spec in the judge dir
+then give each judge the spec in the judge dir and two papers, and let it write <judge dir>/out/<forum>.json;
+MALD_JUDGE=<dir>[:<dir>] python -m mald.judge_agg > report/judge_tables.tex

@@ -9,8 +9,11 @@ out/val/summary.json --> argmax over every method variant run on val:
   m_flags / m_nomodes / m_norubric / m_noflags (gemma panel, llm meta at the best det theta, w)
 and b1 vs b1_nemo for the generator of ours (b1)
 --> report/selected.json (method kwargs) + report/selected_b1.json + report/selection.json
+
+usage: python -m mald.select        selection over all variants
+       python -m mald.select det    best theta and w of the det grid, as json
 """
-import json, re
+import json, re, sys
 
 from mald.paths import OUT, REPORT as REP
 FIXED = {"m_full": {"theta": 0.2}, "m_unc": {"n_reb": 0, "theta": 0.2}, "m_noret": {"retrieval": False, "theta": 0.2},
@@ -23,11 +26,17 @@ def key(s, n):
     return (s[n].get("ndcg_cons", -1), s[n].get("recall_w", -1))
 
 
+def best_det(s):
+    """theta, w of the best deterministic-meta config on val."""
+    dets = [n for n in s if re.match(r"det_t[\d.]+_w[\d.]+$", n)]
+    best = max(dets, key=lambda n: key(s, n))
+    return tuple(map(float, re.match(r"det_t([\d.]+)_w([\d.]+)", best).groups()))
+
+
 def candidates(s):
     """name --> method kwargs for every method variant present in the summary."""
     dets = [n for n in s if re.match(r"det_t[\d.]+_w[\d.]+$", n)]
-    best = max(dets, key=lambda n: key(s, n))
-    t, w = map(float, re.match(r"det_t([\d.]+)_w([\d.]+)", best).groups())
+    t, w = best_det(s)
     out = {n: kw for n, kw in FIXED.items() if n in s}
     out |= {n: dict(theta=float(a), w=float(b), llm_meta=False)
             for n in dets for a, b in [re.match(r"det_t([\d.]+)_w([\d.]+)", n).groups()]}
@@ -37,8 +46,12 @@ def candidates(s):
     return out
 
 
-def main():
+def main(mode="all"):
     s = json.loads((OUT / "val" / "summary.json").read_text())["systems"]
+    if mode == "det":
+        t, w = best_det(s)
+        print(f'{{"theta":{t:g},"w":{w:g}}}')
+        return
     cand = candidates(s)
     pick = max(cand, key=lambda n: key(s, n))
     b1 = max([n for n in ("b1", "b1_nemo") if n in s], key=lambda n: key(s, n))
@@ -52,4 +65,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(*sys.argv[1:2])

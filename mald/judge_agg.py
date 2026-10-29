@@ -111,9 +111,9 @@ def paper(fid, sysname, lab, gt, rec):
         cov = np.array([[len(set(b["covers"]) & set(rev[r])) / len(rev[r]) for r in names] for b in bots])
         rep = int(np.ceil(len(names) / len(bots)))
         big = np.tile(cov, (rep, 1))
-        rb_, cb_ = linear_sum_assignment(-big)
-        rw_, cw_ = linear_sum_assignment(big)
-        alloc = dict(best=float(big[rb_, cb_].mean()), worst=float(big[rw_, cw_].mean()), rand=float(cov.mean()))
+        bi, bj = linear_sum_assignment(-big)
+        wi, wj = linear_sum_assignment(big)
+        alloc = dict(best=float(big[bi, bj].mean()), worst=float(big[wi, wj].mean()), rand=float(cov.mean()))
     return c, fd, fr, reb, alloc
 
 

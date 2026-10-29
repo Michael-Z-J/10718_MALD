@@ -3,8 +3,10 @@
 chat(model, messages, schema) --> post /v1/chat/completions with a json schema
   (grammar-constrained decoding) --> parsed dict.
 each reply is cached on disk under a hash of (model, messages, schema, params),
-so a rerun makes no new calls and gives the same outputs.
+so a rerun makes no new calls and gives the same outputs. token counts (for
+clip) are cached too, so a rerun from a full cache needs no server.
 server url of a model: env MALD_<MODEL>_URL, else the local port below.
+MALD_CACHE_ONLY=1: a reply that is not in the cache is an error (strict rerun).
 """
 import hashlib, json, os, time
 
@@ -30,6 +32,8 @@ def chat(model, messages, schema=None, temp=0.0, seed=0, max_tokens=4096, tag=""
             return d["out"], d["usage"]
         except json.JSONDecodeError:
             pass
+    if os.environ.get("MALD_CACHE_ONLY") == "1":
+        raise LookupError(f"not in cache: {model} {tag}")
     body = dict(model=model, messages=messages, temperature=temp, seed=seed, max_tokens=max_tokens,
                 chat_template_kwargs={"enable_thinking": False})
     if schema:
@@ -82,8 +86,16 @@ def raw(model, messages, schema, temp, seed, max_tokens):
 
 
 def tokens(model, text):
+    """number of tokens of text for model (cached on disk)."""
+    k = key(model, text)
+    p = CACHE / model / "tok" / f"{k}.json"
+    if p.exists():
+        return json.loads(p.read_text())
     r = httpx.post(f"{URLS[model]}/tokenize", json={"content": text}, timeout=120)
-    return len(r.json()["tokens"])
+    n = len(r.json()["tokens"])
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(n))
+    return n
 
 
 def clip(model, text, n):
