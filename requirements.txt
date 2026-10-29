@@ -1,0 +1,8 @@
+httpx
+matplotlib
+numpy
+polars
+scikit-learn
+scipy
+sentence-transformers
+torch
