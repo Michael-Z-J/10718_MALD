@@ -1,3 +1,6 @@
+httpx
 numpy
 polars
 scikit-learn
+sentence-transformers
+torch
