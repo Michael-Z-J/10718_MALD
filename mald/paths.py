@@ -6,6 +6,7 @@ MALD_ROOT     work root, default <repo>/work. put it on a fast local disk.
   out/        system outputs, scores     (MALD_OUT)
   cache/      llm reply cache            (MALD_CACHE)
   judge/      llm-judge bundles, labels  (MALD_JUDGE)
+report tables and figures go to <repo>/report (MALD_REPORT).
 """
 import os
 from pathlib import Path
@@ -23,4 +24,4 @@ BUILD = env("MALD_BUILD", "build")
 OUT = env("MALD_OUT", "out")
 CACHE = env("MALD_CACHE", "cache")
 JUDGE = env("MALD_JUDGE", "judge")
-REPORT = REPO / "report"
+REPORT = Path(os.environ.get("MALD_REPORT", REPO / "report"))
